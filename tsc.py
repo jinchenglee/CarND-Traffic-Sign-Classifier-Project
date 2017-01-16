@@ -37,6 +37,10 @@ class dataset():
         self.train_dataset_size = self.train_dataset.shape[0]
         #print("self.train_dataset_size =", self.train_dataset_size)
         
+    def steps_per_epoch(self, batch_size):
+        assert self.train_dataset_size!=0, "No train dataset exists!"
+        return len(self.train_dataset)//batch_size
+
     def close_dataset(self):
         self.f.close()
         
@@ -61,58 +65,6 @@ class dataset():
         # Test data doesn't need to be loaded in batches.
         return self.test_dataset, self.test_labels
 
-    
-# Load preprocessed data
-file = 'preprocessed.pickle'
-d = dataset()
-d.open_dataset(file)
-X_train_batch_1, y_train_batch_1, _ = d.load_train_batch(128)
-for i in range(306): # Should report 40 training data, the last batch
-    X_train_batch, y_train_batch, runout = d.load_train_batch(128)
-    X_valid_batch, y_valid_batch = d.load_valid_data()
-    X_test_dataset,  y_test_dataset  = d.load_test_data()
-
-# Debug prints
-#print("train_batch[2]=", X_train_batch[2])
-#print("train_label[2]=", y_train_batch[2])
-print("train_batch.shape = ", X_train_batch.shape)
-print("max value in train_batch:", np.max(X_train_batch))
-print("min value in train_batch:", np.min(X_train_batch))
-print("mean value in train_reset:", np.mean(X_train_batch))
-print("train_batch pointer = ", d.train_pointer)
-assert runout==True, "ASSERT: Cannot read out all data in training set!!!"
-
-print("validation_batch.shape = ", X_valid_batch.shape)
-#print("valid_batch[2]=", X_valid_batch[2])
-#print("valid_label[2]=", y_valid_batch[2])
-print("max value in validation_batch:", np.max(X_valid_batch))
-print("min value in validation_batch:", np.min(X_valid_batch))
-print("mean value in validation_batch:", np.mean(X_valid_batch))
-
-print("test_dataset.shape = ", X_test_dataset.shape)
-#print("test_dataset[2]=", X_test_dataset[2])
-#print("test_label[2]=", y_test_dataset[2])
-print("max value in test_dataset:", np.max(X_test_dataset))
-print("min value in test_dataset:", np.min(X_test_dataset))
-print("mean value in test_dataset:", np.mean(X_test_dataset))
-
-# Reset pointers test
-print("Testing dataset.reset_ptr()...")
-d.reset_ptr()
-X_train_batch_reset, y_train_batch_reset, _ = d.load_train_batch(128)
-
-print("train_batch_reset.shape = ", X_train_batch_reset.shape)
-print("max value in train_batch_reset:", np.max(X_train_batch_reset))
-print("min value in train_batch_reset:", np.min(X_train_batch_reset))
-print("mean value in train_batch_reset:", np.mean(X_train_batch_reset))
-print("train_batch pointer = ", d.train_pointer)
-
-assert np.array_equal(X_train_batch_1, X_train_batch_reset), "dataset class reset_ptr() doesn't work!"
-assert np.array_equal(y_train_batch_1, y_train_batch_reset), "dataset class reset_ptr() doesn't work!"
-
-d.close_dataset()
-
-
 
 # ### 3. TSC_Net class
 # 
@@ -124,12 +76,12 @@ import os
 import sys
 from tensorflow.contrib.layers import flatten
 
-LOG_DIR = './tensorboard_log/LeNet'
-MODEL_DIR =  './model'
+LOG_DIR = './tb_log/test'
+MODEL_DIR =  './model/test'
 
 TRAIN_DROPOUT = 0.5 
 TEST_DROPOUT = 1.0
-LEARNING_RATE = 1e-6
+LEARNING_RATE = 1e-3
 
 
 class tsc_net():
@@ -145,11 +97,22 @@ class tsc_net():
         
         # Merge all summaries and write them out
         self.merged_summaries = tf.summary.merge_all()
-        self.train_writer = tf.summary.FileWriter(os.path.join(LOG_DIR, "train"), self.session.graph)
-        self.test_writer = tf.summary.FileWriter(os.path.join(LOG_DIR, "test"))
+
+        # Summary saving directories
+        train_summary_dir = os.path.join(LOG_DIR, "train")
+        test_summary_dir = os.path.join(LOG_DIR, "test")
+        if not os.path.exists(train_summary_dir):
+            os.makedirs(train_summary_dir)
+        if not os.path.exists(test_summary_dir):
+            os.makedirs(test_summary_dir)
+        self.train_writer = tf.summary.FileWriter(train_summary_dir, self.session.graph)
+        self.test_writer = tf.summary.FileWriter(test_summary_dir)
     
         # Merge all the summaries and write them out to /tmp/mnist_logs (by default)
         tf.global_variables_initializer().run()
+
+        # Add ops to save and restore all the variables.
+        self.saver = tf.train.Saver()
 
     def weight_variable(self,shape,stddev=0.1):
         initial = tf.truncated_normal(shape,stddev=stddev)
@@ -250,14 +213,15 @@ class tsc_net():
         tf.summary.scalar('accuracy', self.accuracy)
         
     def train(self,X,y,i):
-        summary, _, loss = self.session.run(
-                [self.merged_summaries, self.optimizer, self.loss],
+        summary, _, loss, accuracy = self.session.run(
+                [self.merged_summaries, self.optimizer, self.loss, self.accuracy],
                 feed_dict={
                     self.img_in: X.astype(np.float32),
                     self.label_truth: y.astype(np.float32)
                 })
         # Record summary every N batches
-        if i%10 == 0:
+        if i%20 == 0:
+            print('training: step {0:5d}, accuracy {1:8.2f}%, loss {2:8.2f}'.format(i, accuracy*100, loss))
             self.train_writer.add_summary(summary, i)
 
     def val(self,X,y,i):
@@ -267,7 +231,7 @@ class tsc_net():
                     self.img_in: X.astype(np.float32),
                     self.label_truth: y.astype(np.float32)
                 })
-        print('val: step {0:5d}, accuracy {1:8.2f}%, loss {2:8.2f}'.format(i, accuracy*100, loss))
+        print('validation: step {0:5d}, accuracy {1:8.2f}%, loss {2:8.2f}'.format(i, accuracy*100, loss))
         self.test_writer.add_summary(summary, i)
         
     def saveParam(self):
@@ -289,35 +253,50 @@ class tsc_net():
 
 # In[8]:
 
+EPOCH = 30
+BATCH_SZ = 128
+
 def main():
     mynet = tsc_net()
     data = dataset()
-    
+
+    if not os.path.exists(MODEL_DIR):
+        os.makedirs(MODEL_DIR)
+    if not os.path.exists(LOG_DIR):
+        os.makedirs(LOG_DIR)
+
     file = 'preprocessed.pickle'
 
     data.open_dataset(file)
 
-    for i in range(100):
-        X_train_batch, y_train_batch, end_of_train_dataset = data.load_train_batch(128)
-        if i==0 :
-            print("X_train_batch.shape = ", np.shape(X_train_batch))
-            print("X_train_batch.dtype = ", X_train_batch.dtype)
-            print("y_train_batch.shape = ", np.shape(y_train_batch))
-            print("y_train_batch.dtype = ", y_train_batch.dtype)
-        mynet.train(X_train_batch, y_train_batch, i)
-        mynet.val(X_train_batch, y_train_batch, i)
+    # Training
+    for j in range(EPOCH):
+        steps_per_epoch = data.steps_per_epoch(BATCH_SZ)
+        print("Epoch {0:4d}, Steps per epoch {1:5d}".format(j, steps_per_epoch))
+        for i in range(steps_per_epoch):
+            X_train_batch, y_train_batch, end_of_train_dataset = data.load_train_batch(BATCH_SZ)
+            if i==0 and j==0 :
+                print("X_train_batch.shape = ", np.shape(X_train_batch))
+                print("X_train_batch.dtype = ", X_train_batch.dtype)
+                print("y_train_batch.shape = ", np.shape(y_train_batch))
+                print("y_train_batch.dtype = ", y_train_batch.dtype)
+            mynet.train(X_train_batch, y_train_batch, j*steps_per_epoch+i)
 
-    X_valid_dataset, y_valid_dataset = data.load_valid_data()
-    mynet.val(X_valid_dataset, y_valid_dataset, 1)
+        # Validation dataset
+        X_valid_dataset, y_valid_dataset = data.load_valid_data()
+        mynet.val(X_valid_dataset, y_valid_dataset, j*steps_per_epoch+i)
+
+        # Reset pointers test
+        print("Testing dataset.reset_ptr()...")
+        data.reset_ptr()
+
+    # Test dataset
     X_test_dataset,  y_test_dataset  = data.load_test_data()
-    mynet.val(X_test_dataset, y_test_dataset, 1)
+    mynet.val(X_test_dataset, y_test_dataset, j*steps_per_epoch+i)
 
-    # Reset pointers test
-    print("Testing dataset.reset_ptr()...")
-    data.reset_ptr()
-    X_train_batch, y_train_batch, end_of_train_dataset = data.load_train_batch(128)
-    mynet.train(X_train_batch, y_train_batch, 1)
     data.close_dataset()
+
+    mynet.saveParam()
 
 if __name__ == '__main__':
     main()
