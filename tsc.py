@@ -76,8 +76,11 @@ import os
 import sys
 from tensorflow.contrib.layers import flatten
 
-LOG_DIR = './tb_log/test'
+LOG_DIR = './tb_log/LeNet_epoch50_batch256_lr1e-3_dropout_fc'
 MODEL_DIR =  './model/test'
+
+EPOCH = 100
+BATCH_SZ = 256
 
 TRAIN_DROPOUT = 0.5 
 TEST_DROPOUT = 1.0
@@ -127,6 +130,8 @@ class tsc_net():
         x = tf.nn.conv2d(x, W, strides=[1,strides,strides,1], padding='VALID')
         x = tf.nn.bias_add(x, b)
         return tf.nn.relu(x)
+        #x = tf.nn.relu(x)
+        #return tf.nn.dropout(x)
     
     def create_tsc_net(self):   
         """
@@ -135,6 +140,9 @@ class tsc_net():
         # Hyperparameters
         mu = 0
         sigma = 0.1
+
+        # Dropout probability
+        self.keep_prob = tf.placeholder(tf.float32)
         
         with tf.name_scope("input_layer"):
             # Input layer: [batch_size, 32, 32, 3] - TODO: Tensorflow doesn't support tf.float64 yet.
@@ -173,26 +181,32 @@ class tsc_net():
             fc1   = tf.matmul(fc0, fc1_W) + fc1_b
             # Activation.
             fc1    = tf.nn.relu(fc1)
+            # Dropout
+            fc1_dropout = tf.nn.dropout(fc1, self.keep_prob)
             tf.summary.histogram("fc1_W", fc1_W)
             tf.summary.histogram("fc1_b", fc1_b)
             tf.summary.histogram("fc1", fc1)
+            tf.summary.histogram("fc1_dropout", fc1_dropout)
             
         with tf.name_scope("layer4_fc"):
             # Layer 4: Fully Connected. Input = 120. Output = 84.
             fc2_W  = self.weight_variable(shape=[120, 84], stddev = sigma)
             fc2_b  = self.bias_variable(shape=[84])
-            fc2    = tf.matmul(fc1, fc2_W) + fc2_b
+            fc2    = tf.matmul(fc1_dropout, fc2_W) + fc2_b
             # Activation.
             fc2    = tf.nn.relu(fc2)
+            # Dropout
+            fc2_dropout = tf.nn.dropout(fc2, self.keep_prob)
             tf.summary.histogram("fc2_W", fc2_W)
             tf.summary.histogram("fc2_b", fc2_b)
             tf.summary.histogram("fc2", fc2)
+            tf.summary.histogram("fc2_dropout", fc2_dropout)
             
         with tf.name_scope("layer5_fc"):
             # Layer 5: Fully Connected. Input = 84. Output = 43.
             fc3_W  = self.weight_variable(shape=[84, 43], stddev = sigma)
             fc3_b  = self.bias_variable(shape=[43])
-            self.logits = tf.matmul(fc2, fc3_W) + fc3_b
+            self.logits = tf.matmul(fc2_dropout, fc3_W) + fc3_b
             tf.summary.histogram("fc3_W", fc3_W)
             tf.summary.histogram("fc3_b", fc3_b)
             tf.summary.histogram("logits", self.logits)
@@ -217,7 +231,8 @@ class tsc_net():
                 [self.merged_summaries, self.optimizer, self.loss, self.accuracy],
                 feed_dict={
                     self.img_in: X.astype(np.float32),
-                    self.label_truth: y.astype(np.float32)
+                    self.label_truth: y.astype(np.float32),
+                    self.keep_prob: TRAIN_DROPOUT
                 })
         # Record summary every N batches
         if i%20 == 0:
@@ -229,7 +244,8 @@ class tsc_net():
                 [self.merged_summaries, self.loss, self.accuracy],
                 feed_dict={
                     self.img_in: X.astype(np.float32),
-                    self.label_truth: y.astype(np.float32)
+                    self.label_truth: y.astype(np.float32),
+                    self.keep_prob: TEST_DROPOUT
                 })
         print('validation: step {0:5d}, accuracy {1:8.2f}%, loss {2:8.2f}'.format(i, accuracy*100, loss))
         self.test_writer.add_summary(summary, i)
@@ -252,9 +268,6 @@ class tsc_net():
 # ### 4. Stitching everthing together
 
 # In[8]:
-
-EPOCH = 30
-BATCH_SZ = 128
 
 def main():
     mynet = tsc_net()
