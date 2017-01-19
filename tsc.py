@@ -76,7 +76,7 @@ import os
 import sys
 from tensorflow.contrib.layers import flatten
 
-LOG_DIR = './tb_log/LeNet_epoch50_batch256_lr1e-3_dropout_fc'
+LOG_DIR = './tb_log/LeNet_2xwider_batch256_decay_lr1e-3_dropout_all'
 MODEL_DIR =  './model/test'
 
 EPOCH = 100
@@ -129,9 +129,9 @@ class tsc_net():
         # Conv2D wrapper, writh bias and relu activation
         x = tf.nn.conv2d(x, W, strides=[1,strides,strides,1], padding='VALID')
         x = tf.nn.bias_add(x, b)
-        return tf.nn.relu(x)
-        #x = tf.nn.relu(x)
-        #return tf.nn.dropout(x)
+        #return tf.nn.relu(x)
+        x = tf.nn.relu(x)
+        return tf.nn.dropout(x, self.keep_prob)
     
     def create_tsc_net(self):   
         """
@@ -151,8 +151,8 @@ class tsc_net():
             
         with tf.name_scope("layer1_conv"):
             # Layer 1: Convolutional. Input = 32x32x3. Output = 28x28x6.
-            conv1_W = self.weight_variable(shape=[5, 5, 3, 6], stddev=sigma)
-            conv1_b = self.bias_variable(shape=[6])
+            conv1_W = self.weight_variable(shape=[5, 5, 3, 12], stddev=sigma)
+            conv1_b = self.bias_variable(shape=[12])
             conv1   = self.conv2d(self.img_in, conv1_W, conv1_b)
             tf.summary.histogram("conv1_W", conv1_W)
             tf.summary.histogram("conv1_b", conv1_b)
@@ -162,8 +162,8 @@ class tsc_net():
 
         with tf.name_scope("layer2_conv"):
             # Layer 2: Convolutional. Output = 10x10x16.
-            conv2_W = self.weight_variable(shape=[5, 5, 6, 16], stddev = sigma)
-            conv2_b = self.bias_variable(shape=[16])
+            conv2_W = self.weight_variable(shape=[5, 5, 12, 32], stddev = sigma)
+            conv2_b = self.bias_variable(shape=[32])
             conv2   = self.conv2d(conv1, conv2_W, conv2_b)
             tf.summary.histogram("conv2_W", conv2_W)
             tf.summary.histogram("conv2_b", conv2_b)
@@ -176,8 +176,8 @@ class tsc_net():
 
         with tf.name_scope("layer3_fc"):
             # Layer 3: Fully Connected. Input = 400. Output = 120.
-            fc1_W = self.weight_variable(shape=[400, 120], stddev = sigma)
-            fc1_b = self.bias_variable(shape=[120])
+            fc1_W = self.weight_variable(shape=[800, 200], stddev = sigma)
+            fc1_b = self.bias_variable(shape=[200])
             fc1   = tf.matmul(fc0, fc1_W) + fc1_b
             # Activation.
             fc1    = tf.nn.relu(fc1)
@@ -190,8 +190,8 @@ class tsc_net():
             
         with tf.name_scope("layer4_fc"):
             # Layer 4: Fully Connected. Input = 120. Output = 84.
-            fc2_W  = self.weight_variable(shape=[120, 84], stddev = sigma)
-            fc2_b  = self.bias_variable(shape=[84])
+            fc2_W  = self.weight_variable(shape=[200, 128], stddev = sigma)
+            fc2_b  = self.bias_variable(shape=[128])
             fc2    = tf.matmul(fc1_dropout, fc2_W) + fc2_b
             # Activation.
             fc2    = tf.nn.relu(fc2)
@@ -204,7 +204,7 @@ class tsc_net():
             
         with tf.name_scope("layer5_fc"):
             # Layer 5: Fully Connected. Input = 84. Output = 43.
-            fc3_W  = self.weight_variable(shape=[84, 43], stddev = sigma)
+            fc3_W  = self.weight_variable(shape=[128, 43], stddev = sigma)
             fc3_b  = self.bias_variable(shape=[43])
             self.logits = tf.matmul(fc2_dropout, fc3_W) + fc3_b
             tf.summary.histogram("fc3_W", fc3_W)
@@ -215,9 +215,10 @@ class tsc_net():
         """
         Loss/accuracy function and optimizer definition.
         """
+        self.learning_rate = tf.placeholder(tf.float32)
         self.label_truth = tf.placeholder(tf.float32, [None,43])
         self.loss =  tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(self.logits, self.label_truth))
-        self.optimizer = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE).minimize(self.loss)
+        self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(self.loss)
         
         #self.prediction = tf.nn.softmax(self.logits)        
         self.accuracy = tf.reduce_mean(tf.cast(tf.equal(tf.argmax(self.logits, 1), 
@@ -226,17 +227,18 @@ class tsc_net():
         tf.summary.scalar('loss', self.loss)
         tf.summary.scalar('accuracy', self.accuracy)
         
-    def train(self,X,y,i):
+    def train(self,X,y,lr,i):
         summary, _, loss, accuracy = self.session.run(
                 [self.merged_summaries, self.optimizer, self.loss, self.accuracy],
                 feed_dict={
                     self.img_in: X.astype(np.float32),
                     self.label_truth: y.astype(np.float32),
-                    self.keep_prob: TRAIN_DROPOUT
+                    self.keep_prob: TRAIN_DROPOUT,
+                    self.learning_rate: lr
                 })
         # Record summary every N batches
-        if i%20 == 0:
-            print('training: step {0:5d}, accuracy {1:8.2f}%, loss {2:8.2f}'.format(i, accuracy*100, loss))
+        if i%50 == 0:
+            print('training: step {0:5d}, lr {1:8.7f}, accuracy {2:8.2f}%, loss {3:8.2f}'.format(i, lr, accuracy*100, loss))
             self.train_writer.add_summary(summary, i)
 
     def val(self,X,y,i):
@@ -283,6 +285,7 @@ def main():
     data.open_dataset(file)
 
     # Training
+    lr = LEARNING_RATE
     for j in range(EPOCH):
         steps_per_epoch = data.steps_per_epoch(BATCH_SZ)
         print("Epoch {0:4d}, Steps per epoch {1:5d}".format(j, steps_per_epoch))
@@ -293,7 +296,9 @@ def main():
                 print("X_train_batch.dtype = ", X_train_batch.dtype)
                 print("y_train_batch.shape = ", np.shape(y_train_batch))
                 print("y_train_batch.dtype = ", y_train_batch.dtype)
-            mynet.train(X_train_batch, y_train_batch, j*steps_per_epoch+i)
+            if i%500 == 0:
+                    lr = lr*0.98
+            mynet.train(X_train_batch, y_train_batch, lr, j*steps_per_epoch+i)
 
         # Validation dataset
         X_valid_dataset, y_valid_dataset = data.load_valid_data()
