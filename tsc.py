@@ -1,90 +1,18 @@
-
-# ### 2. Dataset class
-# - Retrieving pre-processed pickle file. 
-# - Function to load train/val/test batch.
-
-# In[6]:
-
-import tensorflow as tf
-import numpy as np
-import pickle
-import os
-
-class dataset():
-    """
-    Dataset class to retrieve pickle file, and
-    provide function to load train/val batch, test data.
-    """
-    def __init__(self):
-        self.train_pointer = 0
-
-    def reset_ptr(self):
-        """
-        Reset pointers for new epoch.
-        """
-        self.train_pointer = 0
-        
-    def open_dataset(self, file):
-        self.f = open(file, 'rb')
-        data = pickle.load(self.f)
-        self.train_dataset = data['train_dataset']
-        self.train_labels = data['train_labels']
-        self.valid_dataset = data['valid_dataset']
-        self.valid_labels = data['valid_labels']
-        self.test_dataset = data['test_dataset']
-        self.test_labels = data['test_labels']
-        
-        self.train_dataset_size = self.train_dataset.shape[0]
-        #print("self.train_dataset_size =", self.train_dataset_size)
-        
-    def steps_per_epoch(self, batch_size):
-        assert self.train_dataset_size!=0, "No train dataset exists!"
-        return len(self.train_dataset)//batch_size
-
-    def close_dataset(self):
-        self.f.close()
-        
-    def load_train_batch(self, batch_size):
-        if self.train_pointer + batch_size >= self.train_dataset_size:
-            # At the end of training dataset items, less than batch_size requested
-            batch = self.train_dataset_size
-        else:
-            # Get next batch_size out
-            batch = self.train_pointer + batch_size
-            
-        X_out = self.train_dataset[self.train_pointer:batch,:,:,:]
-        y_out = self.train_labels[self.train_pointer:batch]
-        self.train_pointer = batch
-        return X_out, y_out, self.train_pointer>=self.train_dataset_size
-    
-    def load_valid_data(self):
-        # Test data doesn't need to be loaded in batches.
-        return self.valid_dataset, self.valid_labels
-    
-    def load_test_data(self):
-        # Test data doesn't need to be loaded in batches.
-        return self.test_dataset, self.test_labels
-
-
 # ### 3. TSC_Net class
 # 
 # The Traffic Sign Classifier (TSC) Neural Network implemention.
 
-# In[7]:
-
+import tensorflow as tf
+import numpy as np
 import os
 import sys
 from tensorflow.contrib.layers import flatten
 
-LOG_DIR = './tb_log/LeNet_2xwider_batch256_decay_lr1e-3_dropout_all'
-MODEL_DIR =  './model/test'
-
-EPOCH = 100
-BATCH_SZ = 256
+LOG_DIR = './tb_log/2xLeNet_256_8e-4_dropout'
+MODEL_DIR =  './model/2xLeNet_256_8e-4_dropout'
 
 TRAIN_DROPOUT = 0.5 
 TEST_DROPOUT = 1.0
-LEARNING_RATE = 1e-3
 
 
 class tsc_net():
@@ -102,6 +30,8 @@ class tsc_net():
         self.merged_summaries = tf.summary.merge_all()
 
         # Summary saving directories
+        if not os.path.exists(LOG_DIR):
+            os.makedirs(LOG_DIR)
         train_summary_dir = os.path.join(LOG_DIR, "train")
         test_summary_dir = os.path.join(LOG_DIR, "test")
         if not os.path.exists(train_summary_dir):
@@ -116,6 +46,9 @@ class tsc_net():
 
         # Add ops to save and restore all the variables.
         self.saver = tf.train.Saver()
+
+        # Error statistics
+        self.err_per_class = np.zeros([43])
 
     def weight_variable(self,shape,stddev=0.1):
         initial = tf.truncated_normal(shape,stddev=stddev)
@@ -241,7 +174,7 @@ class tsc_net():
             print('training: step {0:5d}, lr {1:8.7f}, accuracy {2:8.2f}%, loss {3:8.2f}'.format(i, lr, accuracy*100, loss))
             self.train_writer.add_summary(summary, i)
 
-    def val(self,X,y,i):
+    def val(self,X,y,i,summary_on):
         summary, loss, accuracy = self.session.run(
                 [self.merged_summaries, self.loss, self.accuracy],
                 feed_dict={
@@ -250,8 +183,24 @@ class tsc_net():
                     self.keep_prob: TEST_DROPOUT
                 })
         print('validation: step {0:5d}, accuracy {1:8.2f}%, loss {2:8.2f}'.format(i, accuracy*100, loss))
-        self.test_writer.add_summary(summary, i)
+        if summary_on:
+            self.test_writer.add_summary(summary, i)
         
+    def err_statistics(self,X,y):
+        logits = self.session.run(
+                [self.logits],
+                feed_dict={
+                    self.img_in: X.astype(np.float32),
+                    self.label_truth: y.astype(np.float32),
+                    self.keep_prob: TEST_DROPOUT
+                })
+        # Error counts per class/category
+        for i in range(len(y)):
+            if np.argmax(logits[0][i]) != np.argmax(y[i]):
+                self.err_per_class[np.argmax(y[i])] += 1
+        print('err statistics: err_per_class = {}'.format(self.err_per_class))
+        return self.err_per_class
+
     def saveParam(self):
         if not os.path.exists(MODEL_DIR):
             os.makedirs(MODEL_DIR)
@@ -266,57 +215,5 @@ class tsc_net():
         self.saver.restore(self.session, checkpoint_path)
         print("Model restored from file: %s" % checkpoint_path)
 
-
-# ### 4. Stitching everthing together
-
-# In[8]:
-
-def main():
-    mynet = tsc_net()
-    data = dataset()
-
-    if not os.path.exists(MODEL_DIR):
-        os.makedirs(MODEL_DIR)
-    if not os.path.exists(LOG_DIR):
-        os.makedirs(LOG_DIR)
-
-    file = 'preprocessed.pickle'
-
-    data.open_dataset(file)
-
-    # Training
-    lr = LEARNING_RATE
-    for j in range(EPOCH):
-        steps_per_epoch = data.steps_per_epoch(BATCH_SZ)
-        print("Epoch {0:4d}, Steps per epoch {1:5d}".format(j, steps_per_epoch))
-        for i in range(steps_per_epoch):
-            X_train_batch, y_train_batch, end_of_train_dataset = data.load_train_batch(BATCH_SZ)
-            if i==0 and j==0 :
-                print("X_train_batch.shape = ", np.shape(X_train_batch))
-                print("X_train_batch.dtype = ", X_train_batch.dtype)
-                print("y_train_batch.shape = ", np.shape(y_train_batch))
-                print("y_train_batch.dtype = ", y_train_batch.dtype)
-            if i%500 == 0:
-                    lr = lr*0.98
-            mynet.train(X_train_batch, y_train_batch, lr, j*steps_per_epoch+i)
-
-        # Validation dataset
-        X_valid_dataset, y_valid_dataset = data.load_valid_data()
-        mynet.val(X_valid_dataset, y_valid_dataset, j*steps_per_epoch+i)
-
-        # Reset pointers test
-        print("Testing dataset.reset_ptr()...")
-        data.reset_ptr()
-
-    # Test dataset
-    X_test_dataset,  y_test_dataset  = data.load_test_data()
-    mynet.val(X_test_dataset, y_test_dataset, j*steps_per_epoch+i)
-
-    data.close_dataset()
-
-    mynet.saveParam()
-
-if __name__ == '__main__':
-    main()
 
 
