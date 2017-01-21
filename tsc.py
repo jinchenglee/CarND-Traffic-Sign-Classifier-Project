@@ -186,6 +186,17 @@ class tsc_net():
         if summary_on:
             self.test_writer.add_summary(summary, i)
         
+    def predict(self,X):
+        logits = self.session.run(
+                [self.logits],
+                feed_dict={
+                    self.img_in: X.astype(np.float32),
+                    self.keep_prob: TEST_DROPOUT
+                })
+        # Predict class catogery
+        for i in range(len(X)):
+            print("Prediction: img {}, class {}".format(i, np.argmax(logits[0][i])))
+
     def err_statistics(self,X,y):
         logits = self.session.run(
                 [self.logits],
