@@ -196,6 +196,7 @@ class tsc_net():
         # Predict class catogery
         for i in range(len(X)):
             print("Prediction: img {}, class {}".format(i, np.argmax(logits[0][i])))
+        return logits
 
     def err_statistics(self,X,y):
         logits = self.session.run(
