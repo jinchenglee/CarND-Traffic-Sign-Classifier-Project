@@ -5,6 +5,7 @@ from tsc import tsc_net
 from dataset import dataset
 import numpy as np
 import cv2
+import tensorflow as tf
 
 def normalize_grayscale(image_data):
     """
@@ -59,4 +60,8 @@ for i in range(10):
     img_in[i] = normalize_color(img)
 
 # Predict
-mynet.predict(img_in)
+certainty=mynet.predict(img_in)
+
+sess = tf.Session()
+sess.run(tf.nn.top_k(certainty[0], k=5))
+
