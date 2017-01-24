@@ -153,7 +153,7 @@ class tsc_net():
         self.loss =  tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(self.logits, self.label_truth))
         self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(self.loss)
         
-        #self.prediction = tf.nn.softmax(self.logits)        
+        self.prediction = tf.nn.softmax(self.logits)        
         self.accuracy = tf.reduce_mean(tf.cast(tf.equal(tf.argmax(self.logits, 1), 
                                     tf.argmax(self.label_truth, 1)), tf.float32))
         
@@ -187,16 +187,16 @@ class tsc_net():
             self.test_writer.add_summary(summary, i)
         
     def predict(self,X):
-        logits = self.session.run(
-                [self.logits],
+        pred = self.session.run(
+                [self.prediction],
                 feed_dict={
                     self.img_in: X.astype(np.float32),
                     self.keep_prob: TEST_DROPOUT
                 })
         # Predict class catogery
         for i in range(len(X)):
-            print("Prediction: img {}, class {}".format(i, np.argmax(logits[0][i])))
-        return logits
+            print("Prediction: img {}, class {}".format(i, np.argmax(pred[0][i])))
+        return pred
 
     def err_statistics(self,X,y):
         logits = self.session.run(
